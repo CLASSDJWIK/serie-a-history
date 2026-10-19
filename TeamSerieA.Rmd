@@ -1,0 +1,287 @@
+---
+title: "Which is the best team ever in Italian soccer?"
+author: "Nome Cognome"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+# Original Assignment
+
+> **Which is the best team ever in Italian soccer?**
+>
+> This challenge explores all matches of Italian soccer Serie A league from 1993 to current year. The dataset is contained in the website [football-data.co.uk](http://www.football-data.co.uk/italym.php).
+>
+> ### Challenges
+>
+> 1. Think about how to scrape the data from the website, but write no code at this stage.
+> 2. Ask AI to write code to import data by scraping the website. Select only columns Date, HomeTeam, AwayTeam, FTHG (home team goals), FTAG (away team goals) and filter rows with a valid (not NA) Date.
+> 3. Using dplyr and tidyr packages (no for loops!), compute statistics for every team (matches, wins, loses, draws, points, points per match). Hint: mutate a column with the outcome of the match (for instance, H = home teams wins, A = away team wins, P = draw). Then group by team and outcome (home and away) and hence spread the outcome. Do this step without the use of AI.
+> 4. Come up with at least 3 data questions on the data at hand. Just write the questions, do not find the answers.
+
+# Challenge 1: Web Scraping Strategy
+
+Football-Data provides Serie A match results as season-specific CSV files. The proposed approach is to read the Italian league webpage, collect the links ending in `I1.csv`, identify the starting year of each season, and select seasons from 1993/94 onward. Then, we import and combine the files, retain the five required variables, and remove observations with missing dates. This avoids downloading every season manually.
+
+# Challenge 2: Importing and Cleaning the Data
+
+## Setup
+
+Install the packages **once in the RStudio Console** if needed:
+
+`install.packages(c("tidyverse", "rvest", "rmarkdown", "knitr"))`
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = TRUE)
+library(tidyverse)
+library(rvest)
+```
+
+## Find the Serie A CSV files
+
+Read the actual page URL (do not put Markdown link syntax inside `read_html()`). Extract relative or absolute CSV links and normalize them with `url_absolute()`.
+
+```{r scrape-links}
+source_url <- "https://www.football-data.co.uk/italym.php"
+
+page <- read_html(source_url)
+
+serie_a_urls <- page |>
+  html_elements("a[href]") |>
+  html_attr("href") |>
+  na.omit() |>
+  url_absolute(source_url) |>
+  str_subset(regex("/mmz4281/[0-9]{4}/I1\\.csv(?:[?#].*)?$", ignore_case = TRUE)) |>
+  unique()
+
+seasons <- tibble(url = serie_a_urls) |>
+  mutate(
+    season_code = str_match(url, "/mmz4281/([0-9]{4})/I1\\.csv")[, 2],
+    year_code = as.integer(str_sub(season_code, 1, 2)),
+    start_year = if_else(year_code >= 93,
+                         1900L + year_code,
+                         2000L + year_code)
+  ) |>
+  filter(!is.na(start_year),
+         start_year >= 1993,
+         start_year <= as.integer(format(Sys.Date(), "%Y"))) |>
+  distinct(season_code, .keep_all = TRUE) |>
+  arrange(start_year)
+
+if (nrow(seasons) == 0) {
+  stop("Nessun URL Serie A trovato: controllare la pagina Football-Data.")
+}
+
+seasons |> select(season_code, start_year, url) |> print(n = Inf)
+cat("Seasons found:", nrow(seasons), "\n")
+```
+
+## Download and import
+
+Each CSV is downloaded to `data/raw` only if it is not already present. In case of a failed download or malformed file, the report stops with the season code instead of silently excluding matches. No `for` loops are needed.
+
+```{r load_data}
+dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
+
+required_columns <- c("Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG")
+
+read_season <- function(file_url, season_code) {
+  local_file <- file.path("data/raw", paste0("I1_", season_code, ".csv"))
+
+  if (!file.exists(local_file) || file.info(local_file)$size == 0) {
+    message("Downloading season ", season_code)
+    tryCatch(
+      download.file(file_url, destfile = local_file,
+                    mode = "wb", quiet = TRUE),
+      error = function(e) {
+        if (file.exists(local_file)) unlink(local_file)
+        stop("Download failed for season ", season_code,
+             ": ", conditionMessage(e), call. = FALSE)
+      }
+    )
+    Sys.sleep(0.5)
+  }
+
+  if (!file.exists(local_file) || file.info(local_file)$size == 0) {
+    stop("Missing or empty CSV for season ", season_code, call. = FALSE)
+  }
+
+  data <- tryCatch(
+    suppressWarnings(read_csv(
+      local_file,
+      col_types = cols(.default = col_character()),
+      show_col_types = FALSE,
+      progress = FALSE
+    )),
+    error = function(e) stop("Cannot read season ", season_code,
+                              ": ", conditionMessage(e), call. = FALSE)
+  )
+
+  missing_cols <- setdiff(required_columns, names(data))
+  if (length(missing_cols) > 0) {
+    stop("Missing columns in season ", season_code, ": ",
+         paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+
+  issues <- problems(data)
+  if (nrow(issues) > 0) {
+    message("Season ", season_code, ": ", nrow(issues),
+            " CSV parsing issue(s). Inspect problems(read_csv(file)).")
+  }
+
+  data |> select(all_of(required_columns))
+}
+
+serie_a_master <- map2_dfr(
+  seasons$url,
+  seasons$season_code,
+  read_season
+)
+
+cat("Rows before filtering:", nrow(serie_a_master), "\n")
+```
+
+## Keep valid dates and required columns
+
+The assignment asks to discard missing dates. Empty or whitespace-only dates are also treated as missing. The two goal columns are converted to numeric for subsequent analysis; the original date strings are preserved because CSVs may have different date formats.
+
+```{r clean_data}
+valid_dates <- serie_a_master |>
+  filter(!is.na(Date), str_trim(Date) != "") |>
+  select(all_of(required_columns)) |>
+  mutate(
+    FTHG = readr::parse_number(FTHG),
+    FTAG = readr::parse_number(FTAG)
+  )
+
+stopifnot(identical(names(valid_dates), required_columns))
+
+cat("Rows before filtering:", nrow(serie_a_master), "\n")
+cat("Rows after filtering:", nrow(valid_dates), "\n")
+```
+
+## Dataset Preview
+
+```{r dataset-preview}
+head(valid_dates)
+glimpse(valid_dates)
+```
+
+## Data Quality Checks
+
+```{r data-quality}
+quality_summary <- valid_dates |>
+  summarise(
+    matches = n(),
+    missing_dates = sum(is.na(Date) | str_trim(Date) == ""),
+    missing_home_teams = sum(is.na(HomeTeam) | str_trim(HomeTeam) == ""),
+    missing_away_teams = sum(is.na(AwayTeam) | str_trim(AwayTeam) == ""),
+    missing_home_goals = sum(is.na(FTHG)),
+    missing_away_goals = sum(is.na(FTAG))
+  )
+
+quality_summary
+```
+
+The combined Serie A dataset contains **`r format(nrow(serie_a_master), big.mark = ",")`** observations. After removing observations with missing or blank dates, **`r format(nrow(valid_dates), big.mark = ",")`** records remain. These totals are computed from the imported data, rather than entered manually.
+
+Matches without a final score are excluded **only for the subsequent team statistics**, not from the requested Challenge 2 dataset.
+
+```{r completed-matches}
+completed_matches <- valid_dates |>
+  filter(!is.na(HomeTeam), str_trim(HomeTeam) != "",
+         !is.na(AwayTeam), str_trim(AwayTeam) != "",
+         !is.na(FTHG), !is.na(FTAG))
+
+cat("Matches with complete results:", nrow(completed_matches), "\n")
+```
+
+# Challenge 3: Team Statistics
+
+
+```{r}
+
+
+library(dplyr)
+library(tidyr)
+
+# 1. Identify the outcome of each match
+matches_outcome <- completed_matches |>
+  mutate(
+    outcome = case_when(
+      FTHG > FTAG ~ "H",
+      FTHG < FTAG ~ "A",
+      TRUE ~ "P"
+    )
+  )
+
+# 2. Statistics for home teams
+home_stats <- matches_outcome |>
+  transmute(
+    team = HomeTeam,
+    result = case_when(
+      outcome == "H" ~ "wins",
+      outcome == "A" ~ "losses",
+      TRUE ~ "draws"
+    )
+  )
+
+# 3. Statistics for away teams
+away_stats <- matches_outcome |>
+  transmute(
+    team = AwayTeam,
+    result = case_when(
+      outcome == "A" ~ "wins",
+      outcome == "H" ~ "losses",
+      TRUE ~ "draws"
+    )
+  )
+
+# 4. Combine home and away results
+all_results <- bind_rows(home_stats, away_stats)
+
+# 5. Count results and transform into wide format
+team_statistics <- all_results |>
+  count(team, result, name = "n") |>
+  pivot_wider(
+    names_from = result,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  mutate(
+    matches = wins + losses + draws,
+    points = wins * 3 + draws,
+    points_per_match = points / matches
+  ) |>
+  select(
+    team,
+    matches,
+    wins,
+    losses,
+    draws,
+    points,
+    points_per_match
+  ) |>
+  arrange(desc(points_per_match))
+
+# Display results
+print(team_statistics, n = Inf)
+```
+
+
+
+
+# Challenge 4: Data Questions
+
+Three questions to investigate (answers are intentionally not provided):
+
+1. Which team has the highest average points per match since 1993? 
+2. Come variano  i campioni e i retrocessi
+3. Quali sono le regioni dove abbiamo piu campioni o piu squadre  delle regioni?
+
+# Data Source
+
+[Football-Data — Italian league results](https://www.football-data.co.uk/italym.php). Access date: `r Sys.Date()`.
