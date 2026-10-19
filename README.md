@@ -4,10 +4,6 @@
 
 This project explores Italian Serie A match results from the **1993/94 season onward** using data published by [Football-Data](https://www.football-data.co.uk/italym.php). The aim is to prepare a reproducible analysis of team performance over time and investigate what it means to be the “best” team.
 
-**Repository:** [Team Serie A — GitHub](REPLACE_WITH_YOUR_GITHUB_REPOSITORY_URL)
-
-> Replace `REPLACE_WITH_YOUR_GITHUB_REPOSITORY_URL` with the actual GitHub repository link after creating or identifying your repository.
-
 ## Original assignment
 
 > **Which is the best team ever in Italian soccer?**
@@ -53,7 +49,7 @@ serie-a-data-challenge/
 Install packages in the RStudio Console if needed:
 
 ```r
-install.packages(c("tidyverse", "rvest", "rmarkdown", "knitr"))
+install.packages(c("tidyverse", "rvest", "rmarkdown"))
 ```
 
 ## How to run
@@ -79,6 +75,4 @@ install.packages(c("tidyverse", "rvest", "rmarkdown", "knitr"))
 
 Submit the `.Rmd` source and knitted `.html` report in the same GitHub folder, then send the permanent folder link to the course instructor from your academic email, including your first and last name. Follow the assignment's seven-day submission deadline.
 
-## Attribution
 
-Data: [Football-Data.co.uk](https://www.football-data.co.uk/italym.php). The scraping/import code may be AI-assisted as permitted by Challenge 2; the team-statistics work in Challenge 3 must be completed independently.
